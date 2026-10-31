@@ -1,70 +1,87 @@
 # DLogGrader
 
-macOS 15+ 菜单栏应用，用于扫描 DJI Pocket 视频、识别 D-Log / D-Log M / D-Log2 元数据、按需归档原片，并导出 SDR (Rec.709) 和 HDR (HLG) HEVC 视频。两种导出可同时开启，界面为中文。
+DLogGrader 是面向 DJI Pocket 视频的中文 macOS 菜单栏工具：识别 D-Log、D-Log M、D-Log2，导出 Rec.709 SDR 与 HLG HDR，并按需归档原片。
 
-## 构建
+功能特性：
 
-需要 Apple Silicon Mac、Xcode Command Line Tools（Swift 6）、`ffmpeg`。无需 Xcode 工程或第三方 Swift 包。
+- SDR、HDR、原片归档独立开关；D-Log2 可同时导出 SDR 和 HDR。
+- 递归扫描 MP4/MOV，保留子目录结构，显示处理进度与导出记录。
+- SDR 使用 DJI 官方 .cube LUT；HDR 使用 D-Log2 解析式转换，无需 HDR LUT。
+- HEVC Main10 视频、复制原音轨，支持定时自动扫描。
 
-```sh
-bash build.sh
-```
+开发与构建细节见 [DEVELOPMENT.md](DEVELOPMENT.md)。
 
-产物为 `dist/DLogGrader.app`。脚本按 macOS 15、arm64 编译，写入 `LSUIElement=YES`，并进行 ad-hoc 签名。可通过 Finder 打开该应用。此仓库不包含 ffmpeg 或 DJI 官方 LUT；请自行安装并配置。
+## 如何使用
 
-## 首次使用
+### 系统要求与安装
 
-1. 安装 ffmpeg，并在“设置”中确认路径（默认 `/opt/homebrew/bin/ffmpeg`）。
-2. 首次使用必须先在“设置”中选择现有的监视目录，并为已开启的功能分别配置归档、SDR 导出和 HDR 导出目录。上述目录均无默认值；缺失或不存在时会标红提示，扫描和处理会暂停。LUT 目录也无默认值，可选择现有目录供应用自动匹配，或在下方逐条指定 LUT 文件。
-3. “归档原片”“导出 SDR (Rec.709)”“导出 HDR (HLG)”默认都开启，可独立关闭；关闭的路径选择行会置灰。SDR 需为三种 Log 曲线指定官方 `.cube` 文件，或将其放入 LUT 目录自动匹配。D-Log2 的 vivid/普通及 size65/size33 偏好仅用于 SDR。HDR 不需要 LUT，只处理 D-Log2；D-Log 和 D-Log M 的 HDR 显示“不支持”，仍可导出 SDR。
-4. 点击菜单栏图标，选择“立即扫描”。在“查看媒体信息…”检查曲线、规格及 SDR/HDR 各自状态；双击媒体行可查看完整 ffmpeg 元数据。点击“开始处理 (N)”后，每条素材依次执行 SDR、HDR，成功后归档原片。处理期间可点击“停止处理”取消。
+需要 **macOS 15+、Apple Silicon Mac**。另需安装 `ffmpeg`，例如运行 `brew install ffmpeg`。应用默认查找 `/opt/homebrew/bin/ffmpeg`；若安装在别处，到“设置…”修改路径。安装包不包含 ffmpeg 或 DJI LUT。
 
-自动扫描默认开启，间隔 5 分钟。自动扫描完成后会自行开始处理；手动“立即扫描”只更新媒体列表。关闭自动扫描会取消正在进行的扫描或导出。导出失败会删除当前不完整文件，原片留在监视目录；先前成功的另一种导出保留。三个功能开关全关时仍可扫描，“开始处理”禁用。
+安装方式：
 
-## 目录与记录
+1. 从 GitHub Releases 下载 `DLogGrader.zip`，解压，将 `DLogGrader.app` 放入“应用程序”。安装包采用 ad-hoc 签名，首次启动可在 Finder 中右键应用选择“打开”。
+2. 从源码构建：安装 Xcode Command Line Tools，在源码目录运行 `bash build.sh`，打开 `dist/DLogGrader.app`。详见 [开发文档](DEVELOPMENT.md#构建)。
 
-监视目录必选。SDR 与 HDR 成片分别写入各自的导出目录，并保留监视目录下的子目录结构；MP4 原片导出为同名 MP4，MOV 原片导出为同名主文件名的 MP4。所有已开启且适用的导出成功后，开启归档时才把原片移到归档目录的相对路径。目标文件已存在且有对应模式的成功记录、输出文件大小吻合时复用；若无记录或大小不符则跳过并显示原因，不覆盖。归档关闭时，去重只要求成功记录和输出文件大小吻合；归档开启时，扫描还要求归档原片存在。部分导出成功而未归档时，下次处理可复用已成功的成片。
+### 首次设置
 
-旧版使用 SDR/HDR 二选一、先归档再导出，成片放在监视目录；新版改为独立开关及目录，旧的导出格式偏好不再使用。现有 SQLite 记录无需迁移：LUT 路径标识 SDR，`HLG (shader)` 标识 HDR，记录仍可读取并在输出路径相同、文件大小吻合时参与去重。
+点击菜单栏图标 →“设置…”。先选择已有的**监视目录**。默认开启的“归档原片”“导出 SDR (Rec.709)”“导出 HDR (HLG)”还分别要求**归档目录、SDR 导出目录、HDR 导出目录**：四个目录都没有预设值；关闭某项后，该项目录不再必填。必填目录缺失或不存在时会标红，无法扫描或处理。监视目录不能放在归档或导出目录内。
 
-导出记录位于 `~/Library/Application Support/DLogGrader/history.sqlite`，包含时间、源相对路径、曲线、LUT、耗时、结果与输出路径。偏好设置保存在 UserDefaults。
+SDR 还需为素材曲线提供 DJI 官方 `.cube` LUT：选择一个 **LUT 目录**供应用按文件名自动匹配 D-Log、D-Log M、D-Log2，或者在“曲线 LUT”中逐项指定文件。逐项指定优先；若已逐项指定，LUT 目录可留空。D-Log2 的 vivid/普通与 size65/size33 设置只影响 SDR 的自动匹配。缺少匹配 LUT 的素材显示“缺 LUT”；HDR 不使用 LUT。
 
-## 源码结构
+### 菜单与处理
 
-- `Sources/Main.swift`：菜单栏入口与窗口管理
-- `Sources/AppModel.swift`：扫描调度、处理状态与通知
-- `Sources/Scanner.swift`：递归枚举媒体文件
-- `Sources/MetadataReader.swift`：ffmpeg 元数据解析
-- `Sources/Exporter.swift`：ffmpeg LUT 导出与进度解析
-- `Sources/MetalLUTExporter.swift`、`Sources/LUTKernel.metal`、`Sources/HDRKernel.metal`：GPU 10-bit 导出与 SDR/HDR Metal kernel
-- `Tests/gpu-smoke.sh`、`Tests/GPUSmoke.swift`：GPU 命令行自测
-- `Sources/HistoryStore.swift`：SQLite 导出记录
-- `Sources/SettingsStore.swift`：偏好设置和 LUT 匹配
-- `Sources/ProcessRunner.swift`：可取消的外部进程执行
-- `Sources/Views.swift`：中文界面
+| 菜单项 | 功能 |
+| --- | --- |
+| 顶部状态 | 显示监视状态、待处理、已导出及失败数量；处理时菜单栏显示文件名与进度。 |
+| 立即扫描 | 更新媒体列表，不自动导出。 |
+| 开始处理 (N)／停止处理 | 执行待处理项；处理中可取消。 |
+| 自动扫描 | 开启后立即扫描一次，之后按设定间隔扫描；扫描完成后自动开始处理。 |
+| 查看媒体信息… | 查看文件名、曲线、规格和 SDR/HDR 状态；双击一行看完整 ffmpeg 信息。 |
+| 导出记录… | 查看时间、源文件路径、曲线、LUT、耗时和成败；可刷新记录。 |
+| 打开监视目录／打开归档目录 | 在 Finder 中打开相应目录。 |
+| 设置…／退出 | 配置目录、开关、并发数、扫描间隔、开机启动，或退出应用。 |
 
-## GPU 导出与验证
+手动流程分两段：**立即扫描 → 在“查看媒体信息…”确认识别和状态 → 开始处理 (N)**。自动扫描默认开启，每 5 分钟一次；若希望先人工确认，可先关闭它。关闭“自动扫描”会取消正在进行的扫描或处理。“停止处理”会取消当前导出并清理不完整文件。
 
-“设置 → 处理 → GPU 加速导出”默认开启，仅影响 SDR。SDR GPU 路径用 AVAssetReader 解码为 ARGB2101010、Metal 3D 纹理按 `.cube` 的 DOMAIN 和三线性插值调色，再交给 AVAssetWriter 的 HEVC Main10 编码器。帧时间戳沿用源视频，色彩标签为 Rec.709。SDR GPU 失败时会尝试 ffmpeg LUT 路径；关闭开关可直接使用 ffmpeg。
+SDR 开关控制 D-Log、D-Log M、D-Log2 的 Rec.709 导出。默认开启的“GPU 加速导出”只影响 SDR；SDR GPU 失败会回退至 ffmpeg。HDR 开关只对 **D-Log2** 产生 HLG 成片，固定使用 Metal；D-Log、D-Log M 的 HDR 状态为“不支持”，仍可导出 SDR。三个功能全关时仍可扫描，但不能开始处理。
 
-HDR 强制使用 Metal，不使用 `.cube` LUT，也不降级到 ffmpeg。色彩链路为：
+成片分别进入 SDR/HDR 导出目录，保留监视目录下的相对路径。MP4 保持文件名；MOV 保留主文件名，成片扩展名改为 `.MP4`。已开启且适用的导出都成功后，才将原片移动到归档目录的对应子路径；只开归档也可直接归档。导出失败时原片留在监视目录，另一种已成功的成片保留。现有目标文件不会被覆盖；有相应模式的成功记录且文件大小吻合时可复用，否则显示跳过原因。归档开启时，扫描阶段的完成判定还要求归档原片存在。
+
+在“导出记录…”查看成功或失败，悬停失败图标可看错误。记录保存在 `~/Library/Application Support/DLogGrader/history.sqlite`，还包括输出路径和文件大小。
+
+## 算法原理
+
+### SDR：官方 LUT 的 GPU 与 CPU 路径
+
+SDR 直接应用对应 Log 曲线的 DJI 官方 3D `.cube` LUT。默认 GPU 路径读取 `LUT_3D_SIZE`、`DOMAIN_MIN/MAX`，先把 RGB 归一化到 LUT 域，再由 **Metal 3D 纹理**作三线性插值。size65 的 65×65×65 LUT 可完整使用，区别于 `CIColorCube` 的 64 维上限；size33 也受支持。处理后的帧以 HEVC Main10 编码并标记 Rec.709。
+
+关闭 GPU 加速或 SDR GPU 导出失败时，应用改用 ffmpeg 的 `lut3d` 滤镜处理同一 LUT，再由 HEVC VideoToolbox 编码。两条路径的目标视频码率均为 50 Mbps，并复制原音轨。HDR 没有 ffmpeg 回退。
+
+### HDR：D-Log2 → HLG 解析式
+
+HDR 不用 LUT。输入 RGB 逐通道通过 D-Log2 三段反曲线解码：低段线性，中段反解对数段，高段用另一指数表达式。设输入码值为 `x`，代码中的分段式为：
 
 ```text
-D-Log2 10-bit RGB → 解析式反曲线 → 场景线性相机 RGB
-  → D65 色度矩阵 → 线性 BT.2020 RGB → × 0.265
-  → 高光软滚降与向亮度轴色域压缩 → BT.2100 HLG OETF
-  → 10-bit TPDF 抖动 → HEVC Main10 / BT.2020 + HLG + BT.2020nc
+x < 0.148314799066323:
+    L = (x - 0.148314799066323) / 2.960935245492250 + 0.028961695254132
+0.148314799066323 ≤ x < 0.304985337243402:
+    L = 2^((x - 0.304985337243402) / 0.059439938321493 + log2(0.18))
+x ≥ 0.304985337243402:
+    L = 475 / (2^16.285770761945304 - 1) × (2^(16.285770761945304 × x) - 1)
 ```
 
-两种导出均以 50 Mbps 编码，音轨由 ffmpeg `-c copy` 从原片封装到最终 MP4。HDR 的 DJI gamma 元数据为 `Rec.2100 HLG`，SDR 为 `Rec.709`。取消会停止当前的读写器或音频封装进程。已知限制：HDR 仅支持 D-Log2；D-Log 与 D-Log M 的 HDR 状态显示“不支持”，SDR 仍可正常处理。相机色域基色来自 DCTL 实测估计值，极端色彩可能因压缩而改变饱和度。
+这些系数来自对 DJI 官方曲线的逆向拟合，实际实现见 [HDRKernel.metal](Sources/HDRKernel.metal)。解码得到的是**场景线性相机 RGB**。
 
-构建脚本优先用 `xcrun metal` 和 `xcrun metallib` 生成 app 内的两个 `.metallib`。只有 Command Line Tools、缺少这两个离线工具时，脚本会将两个 `.metal` 文件放入 Resources，应用通过 Metal API 在运行时编译。
+接着按相机原色色度坐标与 D65 白点推导相机 RGB→XYZ 矩阵，再乘 BT.2020 的 XYZ→RGB 矩阵，得到相机色域→线性 BT.2020 的 **3×3 矩阵**。代码的三列分别是 `(1.098802, -0.057361, 0.001518)`、`(-0.024111, 1.248432, -0.033032)`、`(-0.074691, -0.191071, 1.031515)`。结果乘 `0.265` 安排 HLG 亮度范围。程序先用 BT.2020 亮度权重 `(0.2627, 0.6780, 0.0593)` 计算亮度，从 `0.8` 开始平滑滚降高光，再沿亮度轴压缩越界的色度，尽量保住高饱和高光的颜色关系；最终范围约束仅作收尾，主要映射并非硬裁切。
 
-在有 Metal 设备及 HEVC Main10 编码能力的 Mac 上，可用一段带音轨的 10-bit 源片和实际 LUT 运行命令行自测：
+然后逐通道应用 **BT.2100 HLG OETF**：低亮度段用平方根形式，高亮度段用对数形式。输出前加入约 ±1 个 10-bit 码值范围内的 TPDF 抖动，再写入 10-bit 像素缓冲区，交给 HEVC Main10 编码。成片标记 BT.2020 原色、HLG 传递函数和 BT.2020 Y′CbCr 矩阵。这里选用 D-Log2 专用解析式及柔和压缩，避免 ACES 1.x ODT 在高饱和高光中可能造成的色相偏移。
 
-```sh
-bash Tests/gpu-smoke.sh '/路径/含空格的源片.mov' '/路径/size65.cube' '/路径/输出.mp4'
-bash Tests/gpu-smoke.sh '/路径/D-Log2源片.mov' --hdr '/路径/HDR输出.mp4'
-```
+### 元数据与重复处理
 
-脚本会构建 app、执行真实 GPU 导出，并用 `ffprobe` 打印编码、profile、像素格式、尺寸、帧率和色彩标签。应看到 HEVC `Main 10`、`yuv420p10le` 和源片相同的尺寸/帧率；HDR 还会断言 `bt2020`、`arib-std-b67`、`bt2020nc`。再用 `ffprobe -show_streams` 确认源音轨存在。建议 SDR 用 size65 与 size33 各测一次，并用含中文、空格及 SMB 路径的源文件验证路径处理。若当前机器没有可用 Metal 设备，CLI 会报错；应用仅在 SDR 模式自动降级到 ffmpeg。
+两种导出都会写入 DJI 的 `com.dji.camera.ColorGammaSxS` 元数据：SDR 为 `Rec.709`，HDR 为 `Rec.2100 HLG`。扫描时，该字段使成片被识别为非 Log 视频，因此即使成片重新出现在监视目录，也不会再被当作待调色原片。导出记录与输出文件大小校验还用于复用已有成片。
+
+## 常见问题
+
+**可以免费导出 4K 吗？** 可以。DLogGrader 定位为免费、直接的 DJI Log 4K 批量转换工具；对于受达芬奇免费版导出限制影响的工作流，它提供无需建立剪辑工程的替代流程。输出分辨率沿用源片。
+
+**HLG 和 Rec.709 有什么区别？** Rec.709 用于常规 SDR 交付；HLG 结合 BT.2020 色域与 HDR 传递函数，供支持 HLG 的显示链路呈现更宽亮度范围。
