@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build app
+        run: bash build.sh
+
+      - name: Verify build
+        run: |
+          test -x dist/DLogGrader.app/Contents/MacOS/DLogGrader
+          plutil -lint dist/DLogGrader.app/Contents/Info.plist
+          codesign --verify dist/DLogGrader.app
+
+      - name: Package
+        run: |
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent DLogGrader.app DLogGrader.zip
+          shasum -a 256 DLogGrader.zip > DLogGrader.zip.sha256
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME:-manual}"
+          gh release create "$TAG" dist/DLogGrader.zip dist/DLogGrader.zip.sha256 \
+            --title "DLogGrader $TAG" \
+            --notes "菜单栏 DJI D-Log 调色导出工具。解压后将 DLogGrader.app 放入 /Applications；首次启动右键→打开（ad-hoc 签名）。" \
+            || gh release upload "$TAG" dist/DLogGrader.zip dist/DLogGrader.zip.sha256 --clobber
