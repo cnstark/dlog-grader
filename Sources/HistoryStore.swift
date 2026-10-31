@@ -46,6 +46,7 @@ final class HistoryStore: @unchecked Sendable {
         let output = URL(fileURLWithPath: outputPath)
         guard let actualSize = (try? output.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) else { return false }
         while sqlite3_step(statement) == SQLITE_ROW {
+            guard !string(statement, 2).hasPrefix("手动 · ") else { continue }
             guard (string(statement, 2) == "HLG (shader)") == hdr else { continue }
             guard actualSize == sqlite3_column_int64(statement, 1) else { continue }
             if let archiveRoot, !FileManager.default.fileExists(atPath: archiveRoot.appendingPathComponent(string(statement, 0)).path) { continue }

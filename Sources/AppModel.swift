@@ -33,10 +33,14 @@ struct MediaStatus: Equatable {
 }
 
 struct MediaItem: Identifiable {
+    enum Source { case watch, manual }
     let id: String
     let url: URL
     let relativePath: String
     let metadata: MediaMetadata
+    var source: Source = .watch
+    var sdrOutputPath: String?
+    var hdrOutputPath: String?
     var status: MediaStatus
     var name: String { url.lastPathComponent }
 }
@@ -64,6 +68,7 @@ private struct ExportJob: Sendable {
     private var activeGPUExporters: [UUID: MetalLUTExporter] = [:]
     private var activeProgress: [UUID: (name: String, percent: Int)] = [:]
     private var lastScan = Date.distantPast
+    private var reservedManualPaths: Set<String> = []
 
     init() {
         do { history = try HistoryStore(); records = history?.all() ?? [] }
@@ -75,17 +80,18 @@ private struct ExportJob: Sendable {
     var pendingCount: Int { items.filter { $0.status.canProcess }.count }
     var exportedCount: Int { items.filter { $0.status.exported }.count }
     var failedCount: Int { items.filter { $0.status.failed }.count }
-    var actionablePendingCount: Int { pendingCount }
+    var actionablePendingCount: Int { items.filter { $0.source == .watch && $0.status.canProcess }.count }
     var processingActionTitle: String { processing ? "停止处理" : "开始处理 (\(actionablePendingCount))" }
-    var statusMessage: String? { settings.requiredDirectoryIssue ?? message }
-    var canToggleProcessing: Bool { processing || (!scanning && settings.requiredDirectoryIssue == nil && actionablePendingCount > 0) }
+    var statusMessage: String? { message }
+    var canToggleProcessing: Bool { processing || (!scanning && settings.scanDirectoryIssue == nil && items.contains { $0.source == .watch && $0.status.canProcess }) }
+    var canStartManualExport: Bool { !scanning && !processing }
     var isActive: Bool { settings.autoScan }
 
     func scanNow() { startScan(autoProcess: false) }
     func startAutomaticScan() { startScan(autoProcess: true) }
     private func startScan(autoProcess: Bool) {
         guard !scanning, !processing else { return }
-        if let issue = settings.requiredDirectoryIssue {
+        if let issue = settings.scanDirectoryIssue {
             message = issue
             lastScan = Date()
             return
@@ -107,10 +113,10 @@ private struct ExportJob: Sendable {
         if processing { cancelScan() } else { startProcessing() }
     }
     private func startProcessing() {
-        if let issue = settings.requiredDirectoryIssue { message = issue; return }
-        guard !scanning, !processing, actionablePendingCount > 0 else { return }
+        if let issue = settings.scanDirectoryIssue { message = issue; return }
+        guard !scanning, !processing, items.contains(where: { $0.source == .watch && $0.status.canProcess }) else { return }
         processing = true
-        processingTask = Task { await performPendingItems() }
+        processingTask = Task { await performPendingItems(source: .watch) }
     }
     func toggleAutoScan() {
         settings.autoScan.toggle()
@@ -118,9 +124,89 @@ private struct ExportJob: Sendable {
     }
     func timerTick() {
         guard settings.autoScan, !scanning, !processing else { return }
+        guard settings.scanDirectoryIssue == nil else { return }
         if Date().timeIntervalSince(lastScan) >= Double(max(1, settings.intervalMinutes)) * 60 { startScan(autoProcess: true) }
     }
     func refreshRecords() { records = history?.all() ?? [] }
+
+    func chooseManualFiles() {
+        guard canStartManualExport else { return }
+        if let issue = settings.exportDirectoryIssue { message = issue; return }
+        guard settings.sdrEnabled || settings.hdrEnabled else { message = "请先开启 SDR 或 HDR 导出"; return }
+        guard FileManager.default.fileExists(atPath: settings.ffmpegPath) else {
+            message = "找不到 ffmpeg：\(settings.ffmpegPath)"; return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.canCreateDirectories = true
+        panel.allowedContentTypes = [.init(filenameExtension: "mp4")!, .init(filenameExtension: "mov")!]
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        processing = true
+        message = nil
+        processingTask = Task {
+            let ids = await prepareManualFiles(panel.urls)
+            if !Task.isCancelled { await performPendingItems(source: .manual, ids: Set(ids)) }
+            else { finishProcessing() }
+        }
+    }
+
+    private func manualOutput(for file: URL, root: String) -> String {
+        let name = file.deletingPathExtension().lastPathComponent
+        let folder = URL(fileURLWithPath: root).standardizedFileURL
+        var number = 1
+        while true {
+            let suffix = number == 1 ? "" : "-\(number)"
+            let candidate = folder.appendingPathComponent(name + suffix + ".MP4").path
+            if !reservedManualPaths.contains(candidate) && !FileManager.default.fileExists(atPath: candidate) {
+                reservedManualPaths.insert(candidate)
+                return candidate
+            }
+            number += 1
+        }
+    }
+
+    private func prepareManualFiles(_ files: [URL]) async -> [String] {
+        var ids: [String] = []
+        for file in files {
+            if Task.isCancelled { return ids }
+            let id = UUID().uuidString
+            ids.append(id)
+            let runner = ProcessRunner()
+            currentRunner = runner
+            let metadata: MediaMetadata
+            do { metadata = try await MetadataReader.read(file, ffmpeg: settings.ffmpegPath, runner: runner) }
+            catch {
+                currentRunner = nil
+                if Task.isCancelled { return ids }
+                let fallback = MediaMetadata(gamma: .unknown, specification: "—", duration: 0, rawOutput: error.localizedDescription)
+                items.append(MediaItem(id: id, url: file, relativePath: file.lastPathComponent,
+                                       metadata: fallback, source: .manual,
+                                       status: MediaStatus(sdr: .failed(error.localizedDescription), hdr: .disabled)))
+                continue
+            }
+            currentRunner = nil
+            if !metadata.gamma.isLog {
+                let alert = NSAlert()
+                alert.messageText = "该素材不是 Log 格式，无需调色"
+                alert.informativeText = file.lastPathComponent
+                alert.runModal()
+                items.append(MediaItem(id: id, url: file, relativePath: file.lastPathComponent,
+                                       metadata: metadata, source: .manual,
+                                       status: MediaStatus(sdr: .skipped("非 Log 素材"), hdr: .disabled)))
+                continue
+            }
+            var item = MediaItem(id: id, url: file, relativePath: file.lastPathComponent,
+                                 metadata: metadata, source: .manual,
+                                 status: MediaStatus(sdr: .disabled, hdr: .disabled))
+            if settings.sdrEnabled { item.sdrOutputPath = manualOutput(for: file, root: settings.sdrExportPath) }
+            if settings.hdrEnabled && metadata.gamma == .dlog2 { item.hdrOutputPath = manualOutput(for: file, root: settings.hdrExportPath) }
+            item.status = status(for: item)
+            items.append(item)
+        }
+        return ids
+    }
 
     private func output(for relative: String, root: String) -> URL {
         let name = (relative as NSString).pathExtension.lowercased() == "mov"
@@ -128,6 +214,12 @@ private struct ExportJob: Sendable {
         return URL(fileURLWithPath: root).standardizedFileURL.appendingPathComponent(name)
     }
     private func status(for item: MediaItem) -> MediaStatus {
+        if item.source == .manual {
+            let sdr: ExportStage = !settings.sdrEnabled ? .disabled :
+                (settings.selectedLUT(for: item.metadata.gamma) == nil ? .missingLUT : .pending)
+            let hdr: ExportStage = !settings.hdrEnabled ? .disabled : (item.metadata.gamma == .dlog2 ? .pending : .unsupported)
+            return MediaStatus(sdr: sdr, hdr: hdr)
+        }
         let archive = settings.archiveEnabled ? URL(fileURLWithPath: settings.archivePath).standardizedFileURL : nil
         let sdrOutput = output(for: item.relativePath, root: settings.sdrExportPath)
         let hdrOutput = output(for: item.relativePath, root: settings.hdrExportPath)
@@ -146,10 +238,10 @@ private struct ExportJob: Sendable {
     }
     private func refreshEligibility() {
         guard !processing else { return }
-        for index in items.indices where !items[index].status.failed {
+        for index in items.indices where items[index].source == .watch && !items[index].status.failed {
             items[index].status = status(for: items[index])
         }
-        if settings.requiredDirectoryIssue == nil && message == "请先在设置中配置目录" { message = nil }
+        if settings.scanDirectoryIssue == nil && message?.hasPrefix("请先在设置中配置") == true { message = nil }
         if !settings.sdrEnabled && !settings.hdrEnabled && !settings.archiveEnabled {
             message = "无可执行导出：请开启 SDR、HDR 或归档原片"
         } else if message == "无可执行导出：请开启 SDR、HDR 或归档原片" { message = nil }
@@ -172,9 +264,9 @@ private struct ExportJob: Sendable {
             lastScan = Date()
             refreshRecords()
         }
-        items = []
+        items.removeAll { $0.source == .watch }
         message = nil
-        if let issue = settings.requiredDirectoryIssue { message = issue; return false }
+        if let issue = settings.scanDirectoryIssue { message = issue; return false }
         let watch = URL(fileURLWithPath: settings.watchPath).standardizedFileURL
         let roots = [settings.archivePath, settings.sdrExportPath, settings.hdrExportPath]
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -218,28 +310,33 @@ private struct ExportJob: Sendable {
         return !Task.isCancelled
     }
 
-    private func performPendingItems() async {
-        defer {
-            processing = false
-            processingTask = nil
-            activeRunners.removeAll()
-            activeGPUExporters.removeAll()
-            activeProgress.removeAll()
-            currentExportName = nil
-            refreshRecords()
-        }
-        let selected = items.filter { $0.status.canProcess }
+    private func finishProcessing() {
+        processing = false
+        processingTask = nil
+        currentRunner = nil
+        activeRunners.removeAll()
+        activeGPUExporters.removeAll()
+        activeProgress.removeAll()
+        reservedManualPaths.removeAll()
+        currentExportName = nil
+        refreshRecords()
+    }
+
+    private func performPendingItems(source: MediaItem.Source, ids: Set<String>? = nil) async {
+        defer { finishProcessing() }
+        let selected = items.filter { $0.source == source && $0.status.canProcess && (ids == nil || ids!.contains($0.id)) }
         var pendingJobs = selected.flatMap { item -> [ExportJob] in
             [(false, item.status.sdr), (true, item.status.hdr)].compactMap { hdr, stage in
                 guard stage.needsWork else { return nil }
                 let root = hdr ? settings.hdrExportPath : settings.sdrExportPath
-                return ExportJob(id: item.id, hdr: hdr, outputPath: output(for: item.relativePath, root: root).path)
+                let path = hdr ? item.hdrOutputPath : item.sdrOutputPath
+                return ExportJob(id: item.id, hdr: hdr, outputPath: path ?? output(for: item.relativePath, root: root).path)
             }
         }
         var remaining = Dictionary(pendingJobs.map { ($0.id, 1) }, uniquingKeysWith: +)
         for item in selected where remaining[item.id] == nil {
             if Task.isCancelled { return }
-            archiveIfReady(item.id)
+            if source == .watch { archiveIfReady(item.id) }
         }
         var activePaths: Set<String> = []
         do {
@@ -259,7 +356,7 @@ private struct ExportJob: Sendable {
                 while let job = try await group.next() {
                     activePaths.remove(job.outputPath)
                     remaining[job.id, default: 1] -= 1
-                    if remaining[job.id] == 0 { archiveIfReady(job.id) }
+                    if source == .watch && remaining[job.id] == 0 { archiveIfReady(job.id) }
                     submitNext()
                 }
             }
@@ -305,7 +402,7 @@ private struct ExportJob: Sendable {
         }
         // A completed first export may be reused after a later export failed,
         // even though the original has not yet moved into the archive.
-        if history?.hasSuccess(outputPath: output.path, hdr: hdr) == true {
+        if item.source == .watch && history?.hasSuccess(outputPath: output.path, hdr: hdr) == true {
             setStage(id, hdr: hdr, stage: .done)
             return
         }
@@ -314,7 +411,7 @@ private struct ExportJob: Sendable {
             return
         }
         let start = Date()
-        let lutRecord = hdr ? "HLG (shader)" : (lut?.lastPathComponent ?? "")
+        let lutRecord = (item.source == .manual ? "手动 · " : "") + (hdr ? "HLG (shader)" : (lut?.lastPathComponent ?? ""))
         activeProgress[jobID] = (file.lastPathComponent, 0)
         updateExportDisplay()
         setStage(id, hdr: hdr, stage: .exporting(0))

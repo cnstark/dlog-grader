@@ -77,11 +77,16 @@ import ServiceManagement
         return nil
     }
 
-    var requiredDirectoryIssue: String? {
-        if directoryIssue(watchPath) != nil { return "请先在设置中配置目录" }
-        if archiveEnabled && directoryIssue(archivePath) != nil { return "请先在设置中配置目录" }
-        if sdrEnabled && directoryIssue(sdrExportPath) != nil { return "请先在设置中配置目录" }
-        if hdrEnabled && directoryIssue(hdrExportPath) != nil { return "请先在设置中配置目录" }
+    var exportDirectoryIssue: String? {
+        if sdrEnabled && directoryIssue(sdrExportPath) != nil { return "请先在设置中配置 SDR 导出目录" }
+        if hdrEnabled && directoryIssue(hdrExportPath) != nil { return "请先在设置中配置 HDR 导出目录" }
+        return nil
+    }
+
+    var scanDirectoryIssue: String? {
+        if directoryIssue(watchPath) != nil { return "请先在设置中配置监视目录" }
+        if archiveEnabled && directoryIssue(archivePath) != nil { return "请先在设置中配置归档目录" }
+        if let issue = exportDirectoryIssue { return issue }
         return nil
     }
 

@@ -28,6 +28,7 @@ struct MediaInfoView: View {
             HStack {
                 Text("媒体信息").font(.title2.bold())
                 Spacer()
+                Button("手动导出视频…") { model.chooseManualFiles() }.disabled(!model.canStartManualExport)
                 Button("立即扫描") { model.scanNow() }.disabled(model.scanning || model.processing)
                 Button(model.processingActionTitle) { model.toggleProcessing() }
                     .disabled(!model.canToggleProcessing)
@@ -37,6 +38,7 @@ struct MediaInfoView: View {
             }
             HStack {
                 Text("文件名").frame(maxWidth: .infinity, alignment: .leading)
+                Text("来源").frame(width: 55, alignment: .leading)
                 Text("曲线").frame(width: 110, alignment: .leading)
                 Text("规格").frame(width: 225, alignment: .leading)
                 Text("状态").frame(width: 290, alignment: .leading)
@@ -48,8 +50,9 @@ struct MediaInfoView: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(item.name).lineLimit(1)
-                                Text(item.relativePath).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                Text(item.source == .manual ? item.url.path : item.relativePath).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                             }.frame(maxWidth: .infinity, alignment: .leading)
+                            Text(item.source == .manual ? "手动" : "监控").font(.caption).frame(width: 55, alignment: .leading)
                             GammaBadge(gamma: item.metadata.gamma).frame(width: 110, alignment: .leading)
                             Text(item.metadata.specification).font(.caption).frame(width: 225, alignment: .leading)
                             Text(item.status.label).font(.caption).foregroundStyle(statusColor(item.status)).lineLimit(2).help(item.status.label).frame(width: 290, alignment: .leading)
@@ -62,7 +65,7 @@ struct MediaInfoView: View {
                 }
             }
             if model.items.isEmpty {
-                Text(model.scanning ? "正在扫描…" : "暂无媒体。请检查监视目录或立即扫描。")
+                Text(model.scanning ? "正在扫描…" : "暂无媒体。可手动导出视频或扫描监视目录。")
                     .foregroundStyle(.secondary).frame(maxWidth: .infinity).padding()
             }
             Text("共 \(model.items.count) 个文件 · 双击查看完整 ffmpeg 信息")
@@ -108,7 +111,7 @@ struct HistoryView: View {
                             Text(record.date.formatted(date: .numeric, time: .shortened)).frame(width: 145, alignment: .leading)
                             Text(record.relativePath).lineLimit(1).help(record.relativePath).frame(maxWidth: .infinity, alignment: .leading)
                             Text(record.gamma).frame(width: 90, alignment: .leading)
-                            Text(record.lut == "HLG (shader)" ? record.lut : URL(fileURLWithPath: record.lut).lastPathComponent).lineLimit(1).help(record.lut).frame(width: 170, alignment: .leading)
+                            Text(record.lut.hasPrefix("手动 · ") || record.lut == "HLG (shader)" ? record.lut : URL(fileURLWithPath: record.lut).lastPathComponent).lineLimit(1).help(record.lut).frame(width: 170, alignment: .leading)
                             Text(String(format: "%.0f 秒", record.elapsed)).frame(width: 75, alignment: .leading)
                             Text(record.success ? "✅" : "❌").help(record.error).frame(width: 45, alignment: .leading)
                         }.font(.caption).padding(.horizontal).padding(.vertical, 7)
@@ -125,24 +128,26 @@ struct SettingsView: View {
     @ObservedObject var settings: SettingsStore
     var body: some View {
         Form {
-            Section("目录") {
-                pathRow("监视目录", path: $settings.watchPath, directory: true)
-                Toggle("归档原片", isOn: $settings.archiveEnabled)
-                pathRow("归档目录", path: $settings.archivePath, directory: true).disabled(!settings.archiveEnabled)
+            Section("基础：视频导出") {
                 Toggle("导出 SDR (Rec.709)", isOn: $settings.sdrEnabled)
                 pathRow("SDR 导出目录", path: $settings.sdrExportPath, directory: true).disabled(!settings.sdrEnabled)
                 Toggle("导出 HDR (HLG)", isOn: $settings.hdrEnabled)
                 pathRow("HDR 导出目录", path: $settings.hdrExportPath, directory: true).disabled(!settings.hdrEnabled)
                 pathRow("LUT 目录", path: $settings.lutPath, directory: true)
-            }
-            Section("处理") {
                 pathRow("ffmpeg 路径", path: $settings.ffmpegPath, directory: false, cube: false)
                 Toggle("GPU 加速导出", isOn: $settings.useGPUExporter).disabled(!settings.sdrEnabled)
                 Picker("并发数", selection: $settings.concurrency) {
                     ForEach(1...3, id: \.self) { Text("\($0)").tag($0) }
                 }
+            }
+            Section("进阶：监控目录自动处理") {
+                pathRow("监视目录", path: $settings.watchPath, directory: true)
+                Toggle("归档原片", isOn: $settings.archiveEnabled)
+                pathRow("归档目录", path: $settings.archivePath, directory: true).disabled(!settings.archiveEnabled)
                 Toggle("自动扫描", isOn: $settings.autoScan)
                 HStack { Text("扫描间隔（分钟）"); Spacer(); TextField("分钟", value: $settings.intervalMinutes, format: .number).frame(width: 70) }
+            }
+            Section("SDR LUT 偏好") {
                 Picker("D-Log2 风格", selection: $settings.style) {
                     Text("vivid").tag("vivid"); Text("普通").tag("normal")
                 }

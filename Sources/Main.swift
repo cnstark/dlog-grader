@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -8,18 +9,21 @@ import SwiftUI
     private var historyWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var timer: Timer?
+    private var progressObserver: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = NSImage(systemSymbolName: "camera.filters", accessibilityDescription: "DLogGrader")
         statusItem.button?.imagePosition = .imageLeading
+        progressObserver = model.$currentProgress.combineLatest(model.$currentExportName)
+            .sink { [weak self] percent, name in self?.updateStatusItem(name: name, percent: percent) }
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
         timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.model.timerTick(); self?.updateStatusItem() }
         }
-        if model.settings.autoScan { model.startAutomaticScan() }
+        if model.settings.autoScan && model.settings.scanDirectoryIssue == nil { model.startAutomaticScan() }
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -34,6 +38,9 @@ import SwiftUI
             item.isEnabled = false
             menu.addItem(item)
         }
+        let manual = item("手动导出视频…", #selector(manualExport), "")
+        manual.isEnabled = model.canStartManualExport
+        menu.addItem(manual)
         let scan = item("立即扫描", #selector(scan), "r")
         scan.isEnabled = !model.scanning && !model.processing
         menu.addItem(scan)
@@ -65,11 +72,16 @@ import SwiftUI
     }
 
     private func updateStatusItem() {
-        if let name = model.currentExportName { statusItem.button?.title = "\(name) \(model.currentProgress)%"; statusItem.button?.toolTip = name }
+        updateStatusItem(name: model.currentExportName, percent: model.currentProgress)
+    }
+
+    private func updateStatusItem(name: String?, percent: Int) {
+        if let name { statusItem.button?.title = "\(name) \(percent)%"; statusItem.button?.toolTip = name }
         else { statusItem.button?.title = ""; statusItem.button?.toolTip = "DLogGrader" }
     }
 
     @objc private func scan() { model.scanNow() }
+    @objc private func manualExport() { model.chooseManualFiles() }
     @objc private func toggleProcessing() { model.toggleProcessing() }
     @objc private func toggleAutomatic() { model.toggleAutoScan() }
     @objc private func openWatch() { NSWorkspace.shared.open(URL(fileURLWithPath: model.settings.watchPath)) }
