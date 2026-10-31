@@ -2,16 +2,18 @@ import AppKit
 import Combine
 import SwiftUI
 
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     private let model = AppModel()
     private var statusItem: NSStatusItem!
     private var mediaWindow: NSWindow?
     private var historyWindow: NSWindow?
     private var settingsWindow: NSWindow?
+    private var manualWindow: NSPanel?
     private var timer: Timer?
     private var progressObserver: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        model.onManualDialogRequested = { [weak self] draft in self?.showManualDialog(draft) }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = NSImage(systemSymbolName: "camera.filters", accessibilityDescription: "DLogGrader")
         statusItem.button?.imagePosition = .imageLeading
@@ -32,17 +34,18 @@ import SwiftUI
         let state = model.settings.autoScan ? "监视中" : "已暂停"
         let summary = NSMenuItem(title: "\(state) · 待处理 \(model.pendingCount) · 已导出 \(model.exportedCount) · 失败 \(model.failedCount)", action: nil, keyEquivalent: "")
         summary.isEnabled = false
+        let manual = item("手动导出视频…", #selector(manualExport), "")
+        manual.isEnabled = model.canStartManualExport
+        menu.addItem(manual)
+        menu.addItem(.separator())
         menu.addItem(summary)
         if let message = model.statusMessage {
             let item = NSMenuItem(title: message, action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)
         }
-        let manual = item("手动导出视频…", #selector(manualExport), "")
-        manual.isEnabled = model.canStartManualExport
-        menu.addItem(manual)
         let scan = item("立即扫描", #selector(scan), "r")
-        scan.isEnabled = !model.scanning && !model.processing
+        scan.isEnabled = model.canStartScan
         menu.addItem(scan)
         let processing = item(model.processingActionTitle, #selector(toggleProcessing), "")
         processing.isEnabled = model.canToggleProcessing
@@ -82,6 +85,26 @@ import SwiftUI
 
     @objc private func scan() { model.scanNow() }
     @objc private func manualExport() { model.chooseManualFiles() }
+    private func showManualDialog(_ draft: ManualExportDraft) {
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 670, height: 570),
+                            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        panel.title = "手动导出视频"
+        panel.isReleasedWhenClosed = false
+        panel.delegate = self
+        panel.contentView = NSHostingView(rootView: ManualExportView(draft: draft, export: { [weak self] in
+            self?.model.confirmManualExport(draft)
+            self?.manualWindow?.close()
+        }, cancel: { [weak self] in self?.manualWindow?.close() }))
+        manualWindow = panel
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === manualWindow else { return }
+        model.cancelManualDialog()
+        manualWindow = nil
+    }
     @objc private func toggleProcessing() { model.toggleProcessing() }
     @objc private func toggleAutomatic() { model.toggleAutoScan() }
     @objc private func openWatch() { NSWorkspace.shared.open(URL(fileURLWithPath: model.settings.watchPath)) }

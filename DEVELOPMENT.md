@@ -11,10 +11,10 @@
 | `Exporter` | SDR 的 ffmpeg `lut3d` 导出、HEVC VideoToolbox 编码、音轨复制与进度解析；也是 SDR GPU 失败时的回退。 |
 | `MetalLUTExporter` | SDR GPU LUT 与 HDR HLG 共用的帧读写、Metal 调度、HEVC Main10 编码、音轨重封装；分别加载 `LUTKernel.metal`、`HDRKernel.metal`。 |
 | `HistoryStore` | SQLite 导出记录；`lut` 字段用“手动 · ”区分手动导出，并按输出路径、模式、文件大小及可选归档原片检查监控目录模式的成功记录。 |
-| `SettingsStore` | UserDefaults 持久化；分别校验手动导出的已开启导出目录与扫描所需的监视、归档目录；处理 LUT 指定与自动匹配、开机启动状态。 |
+| `SettingsStore` | UserDefaults 持久化监控目录自动流程的格式、导出目录、监视与归档目录、LUT 指定与自动匹配，以及通用运行选项；手动导出的批次选择不写入设置。 |
 | `ProcessRunner` | 外部进程的异步执行、输出收集与取消，用于元数据读取、ffmpeg 导出和音轨封装。 |
 
-`AppModel.swift` 调度手动选择后的逐个元数据读取、扫描、并发处理、状态、通知和监控目录模式导出后的归档。手动选择的 MP4/MOV 以独立来源条目进入同一导出队列，输出直接写入对应目录根下，冲突文件名加序号，不归档原片。`Main.swift` 建立菜单栏入口与窗口；`Views.swift` 实现中文界面。HDR 曲线与参数在 `Sources/HDRKernel.metal`，SDR LUT 采样在 `Sources/LUTKernel.metal`。
+`AppModel.swift` 调度手动选择后的异步元数据读取、扫描、并发处理、状态、通知和监控目录模式导出后的归档。手动导出是基础流程：多选 MP4/MOV 后，由 `ManualExportDraft` 在对话框内收集 SDR/HDR、单个批次 LUT 与输出目录；确认后以独立来源条目进入同一导出队列。成片以 `_SDR` / `_HDR` 后缀直接写入所选目录根下，冲突文件名加序号，不归档原片，也不读取自动流程的格式、LUT 或导出目录预设。设置中的目录、格式及 LUT 配置属于进阶的监控目录自动处理。`Main.swift` 建立菜单栏入口与窗口；`Views.swift` 实现中文界面。HDR 曲线与参数在 `Sources/HDRKernel.metal`，SDR LUT 采样在 `Sources/LUTKernel.metal`。
 
 ## 构建
 
