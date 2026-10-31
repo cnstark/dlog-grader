@@ -174,6 +174,7 @@ struct SettingsView: View {
                 let panel = NSOpenPanel()
                 panel.canChooseDirectories = directory
                 panel.canChooseFiles = !directory
+                panel.canCreateDirectories = true
                 panel.allowsMultipleSelection = false
                 if cube { panel.allowedContentTypes = [.init(filenameExtension: "cube")!] }
                 if panel.runModal() == .OK, let url = panel.url { path.wrappedValue = url.path }
